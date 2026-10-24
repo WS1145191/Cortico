@@ -1,6 +1,12 @@
 /** Persona 心跳；tickDelayMs 提供基准间隔，连续无外部事件时指数退避。 */
-/** policy 返回 null 时仍按此间隔重新求值,以接收热更新。 */
-const POLICY_RECHECK_MS = 30 * 60_000;
+/**
+ * policy 返回 null 时按此间隔重新求值,以接收热更新。
+ *
+ * 取 10 秒而非更长的原因:null 表示"此刻不心跳"(例如普通模式),而模式是运行时可切换的
+ * 配置。若这里取 30 分钟,从普通切到营业后最坏要等半小时才开始第一拍,操作者会以为没生效。
+ * 10 秒只是反复重设一个 setTimeout,不触发生成,开销可以忽略。
+ */
+const POLICY_RECHECK_MS = 10_000;
 
 /**
  * 空拍回退倍率上限。连续两拍之间没有外部事件时，下一拍间隔逐次翻倍至上限；任何外部事件（含 World flush）到达即复位。
@@ -46,10 +52,16 @@ export class Heartbeat {
     }
   }
 
-  /** 下一拍的间隔:基线按空拍数回退。null=此刻不心跳。 */
-  private nextDelay(now: Date): number | null {
+  /**
+   * 下一拍的间隔:基线按空拍数回退。null=此刻不心跳。
+   *
+   * `decaying`:是否计入退避。重查策略那一路不经过 fire(),所以传 false——
+   * 否则每次重查都会把基线乘上退避倍率,配置的间隔就失真了。
+   */
+  private nextDelay(now: Date, decaying = true): number | null {
     const base = this.baseline(now);
     if (base === null) return null;
+    if (!decaying) return base;
     return base * Math.min(2 ** this.idleTicks, IDLE_BACKOFF_MAX);
   }
 

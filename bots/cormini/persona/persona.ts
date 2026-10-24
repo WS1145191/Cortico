@@ -160,8 +160,11 @@ export interface CorminiOptions {
   /**
    * 这份自述在**部署侧**的覆盖文件。存在就用它(前缀与 WebUI 读同一份),不存在则用
    * 包里那份;WebUI 保存一律写到这里——部署者微调出来的提示词是私有资产,不进代码包。
+   *
+   * 传函数则每次取用时重算:多模式人格各自有一份自述文件时,编辑目标要跟着模式走,
+   * 否则营业模式改出来的内容会被写进普通模式那份。
    */
-  orientationOverrideFile?: string;
+  orientationOverrideFile?: string | (() => string);
   /**
    * 首轮对话(风格锚)三份源文件所在目录,即这份部署的 `prompts/`。
    * 不给 = 这个Persona没有首轮对话(不注入,WebUI 也不列源)。
@@ -183,7 +186,7 @@ export class Cormini implements Persona {
   /** 挂载表的活引用(装配层与 core 共用);用时按 id 排序,顺序决定前缀缓存命中。 */
   private readonly worlds: World[];
   private readonly orientationFile: string;
-  private readonly orientationOverrideFile: string | null;
+  private readonly orientationOverride: (() => string) | null;
   protected readonly firstTurnDir: string | null;
   private readonly orientation: () => string;
   private readonly heartbeat: Heartbeat;
@@ -216,7 +219,12 @@ export class Cormini implements Persona {
     this.context = opts.context ?? ((): ContextStagePolicy => CORMINI_CONTEXT_DEFAULTS);
     this.caps = opts.rounds ?? { soft: 6, hard: 12 };
     this.orientationFile = opts.orientationFile ?? CORMINI_ORIENTATION_FILE;
-    this.orientationOverrideFile = opts.orientationOverrideFile ?? null;
+    const override = opts.orientationOverrideFile;
+    this.orientationOverride = typeof override === 'function'
+      ? override
+      : override === undefined
+        ? null
+        : () => override;
     this.firstTurnDir = opts.firstTurnDir ?? null;
     const orientation = opts.orientation;
     this.orientation = typeof orientation === 'function'
@@ -248,14 +256,19 @@ export class Cormini implements Persona {
 
   /** 此刻该读哪份自述:部署侧有覆盖就是它,否则是包里那份。 */
   protected orientationSource(): string {
-    return this.orientationOverrideFile && existsSync(this.orientationOverrideFile)
-      ? this.orientationOverrideFile
-      : this.orientationFile;
+    const override = this.orientationOverrideFile();
+    return override && existsSync(override) ? override : this.orientationFile;
+  }
+
+  /** 当前生效的部署侧覆盖文件路径;没有就是 null。多模式人格按模式给出不同的那份。 */
+  protected orientationOverrideFile(): string | null {
+    return this.orientationOverride ? this.orientationOverride() : null;
   }
 
   /** 按界面语言声明 WebUI 文案；源 key、路径与清除动作保持一致。 */
   webUi(language: Language = 'zh'): PersonaWebUiDecl {
     const t = webUiText(language);
+    const overrideFile = this.orientationOverrideFile();
     return {
       promptDocs: [
         {
@@ -263,7 +276,7 @@ export class Cormini implements Persona {
           title: 'ORIENTATION',
           description: t.orientation,
           path: this.orientationSource(),
-          ...(this.orientationOverrideFile ? { deploymentPath: this.orientationOverrideFile } : {}),
+          ...(overrideFile ? { deploymentPath: overrideFile } : {}),
         },
         {
           key: 'constitution',

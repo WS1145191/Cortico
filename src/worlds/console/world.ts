@@ -32,8 +32,11 @@
  *
  * 聊天协议(JSON行):
  *   客户端→ {type:'hello', name}                报名字(必须先于msg)
- *          {type:'msg', text, images?}         发消息;images 为 [{mime, base64, name?}],
- *                                              text 与 images 至少一样非空
+ *          {type:'msg', text, images?, silent?} 发消息;images 为 [{mime, base64, name?}],
+ *                                              text 与 images 至少一样非空。
+ *                                              silent:true 表示只入库不唤醒——对话留在事件库里,
+ *                                              但本轮不触发模型。给"另一个进程已经在回答、
+ *                                              这里只负责记下来"的场景用(如 AIRI 转发)。
  *          {type:'greet', label}               按下控制台页那颗按钮;label 是按钮上当时显示的字
  *   服务端→ {type:'msg', from, text, ts, images?}  广播(用户消息回显+bot消息);
  *                                              images 为 [{ref, mime, name?}](ref 是附件句柄)
@@ -478,6 +481,10 @@ export class ConsoleWorld implements World {
       // 口令标记由 World 加,操作员不打;meta.from/body 供 hello 时历史回放还原,图片从落库的 blobs 取。
       const pin = this.activePin();
       const line = `[${shortTime(this.timezone)}] ${client.name}: ${text}`;
+      // 另一个进程已经在回答这一轮,这里只记账不唤醒:事件仍落库(记忆完整),
+      // 但 trigger 用 piggyback——不启动批次计时器,要等别的东西(heartbeat、真实用户消息)
+      // 唤醒时才随那一批一起投递。见 core/bus.ts 的 push()。
+      const silent = msg.silent === true;
       // console_send 回执要报"上一条发出之后控制台上有没有人说过话",按条数记比
       // 按时间戳比更准:事件库的 ts 只到秒,同秒的消息分不出先后。
       this.operatorMessages += 1;
@@ -493,7 +500,7 @@ export class ConsoleWorld implements World {
           meta: { from: client.name, body: text },
           ...(blobs.length ? { blobs } : {}),
         },
-        { trigger: 'flush' },
+        { trigger: silent ? 'piggyback' : 'flush' },
       ).then((envelope) => {
         // 回显广播给所有客户端(含发送者本人——前端以回显为准渲染);句柄在落库后才有。
         const wireImages = wireImagesOf(envelope);
