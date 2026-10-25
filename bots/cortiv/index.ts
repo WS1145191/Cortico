@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import type { BotDefinition, BotParts } from 'cortico/bot.ts';
 import type { ConfigGroup, CoreConfig, World } from 'cortico/core/types.ts';
 import type { LoadedConfig } from 'cortico/deploy.ts';
@@ -9,13 +9,51 @@ import type { ConsoleConfigSection } from 'cortico/worlds/console/config.ts';
 import type { BilibiliConfigSection } from 'cortico/worlds/bilibili/config.ts';
 import type { MinecraftConfigSection } from 'cortico/worlds/minecraft/config.ts';
 import { CORTIV_TOOL_DECLS, CortiV } from './persona/persona.ts';
-import { CORMINI_TOOL_SUMMARIES, type ContextStagePolicy } from '../cormini/persona/persona.ts';
-import { contextStageConfigGroup } from '../cormini/persona/config.ts';
+import { CORMINI_ORIENTATION_FILE, CORMINI_TOOL_SUMMARIES, type ContextStagePolicy } from '../cormini/persona/persona.ts';
+import { contextStageConfigGroup, modeConfigGroup } from '../cormini/persona/config.ts';
 
 const HERE = resolve(import.meta.dirname);
 
 /** 存在方式自述的源文件;WebUI「Persona」页可编辑,重载前缀即生效。 */
 const ORIENTATION_FILE = resolve(HERE, 'persona/ORIENTATION.md');
+
+/**
+ * 两种运行模式:被动应答 / 主动营业。共用同一份工作区记忆。
+ *
+ * 与 Cormini 同一套语义:普通模式不主动醒来,营业模式按心跳间隔自己醒。
+ * 直播场景两者都用得上 —— 下播时切成普通,开播切成营业。
+ */
+export type CortiVMode = 'normal' | 'work';
+
+/** 营业模式的自述文件(相对部署根);不存在时退回普通模式那份。 */
+const WORK_ORIENTATION = ['prompts', 'ORIENTATION.work.md'] as const;
+
+/**
+ * 当前模式下,部署侧自述文件的**编辑目标**(WebUI 保存写这个路径)。
+ * 营业模式写自己那份;普通模式写 ORIENTATION.md。
+ */
+function resolveOrientationFile(cfg: CortiVConfig, loaded: LoadedConfig<CortiVConfig>): string {
+  return cfg.mode === 'work'
+    ? resolve(loaded.rootDir, ...WORK_ORIENTATION)
+    : resolve(loaded.rootDir, 'prompts', 'ORIENTATION.md');
+}
+
+/**
+ * 此刻该用哪份自述:营业模式优先用 prompts/ORIENTATION.work.md,
+ * 其余情况用 prompts/ORIENTATION.md,再没有就退回包内那份默认自述。
+ *
+ * 每次拼系统前缀时调用,所以改 mode 或编辑文件都不需要重启。
+ */
+function resolveOrientation(cfg: CortiVConfig, loaded: LoadedConfig<CortiVConfig>): string {
+  const candidates = cfg.mode === 'work'
+    ? [resolveOrientationFile(cfg, loaded), resolve(loaded.rootDir, 'prompts', 'ORIENTATION.md')]
+    : [resolveOrientationFile(cfg, loaded)];
+  for (const file of candidates) {
+    if (existsSync(file)) return readFileSync(file, 'utf8').trim();
+  }
+  // 部署侧一份都没有:用包内默认,保证前缀永远拼得出来。
+  return readFileSync(CORMINI_ORIENTATION_FILE, 'utf8').trim();
+}
 
 /**
  * 这个Persona为之设计的渠道。实现由启动器并进来(仓内目录加扩展),哪些挂载由 config.json 的
@@ -57,6 +95,8 @@ export interface CortiVConfig extends CoreConfig {
   context: CoreConfig['context'] & ContextStagePolicy;
   rounds: { soft: number; hard: number };
   cognition: { enabled: boolean };
+  /** 当前模式;两档共用一份 Memory,差别只在唤醒时机与自述文件。 */
+  mode: CortiVMode;
   tick: {
     /** null disables baseline wakeups. */
     intervalMinutes: number | null;
@@ -90,13 +130,21 @@ function build(loaded: LoadedConfig<CortiVConfig>, worlds: World[]): BotParts<Co
     // Persona把它自报为可编辑的静态前缀源(Persona卡),前缀也从它现读。
     orientationFile: ORIENTATION_FILE,
     // 部署侧的自述覆盖:存在就用它,WebUI 保存也落到那边(见 PromptDocDecl.deploymentPath)。
-    orientationOverrideFile: resolve(loaded.rootDir, 'prompts', 'ORIENTATION.md'),
+    // 传函数 = 编辑目标跟着模式走。
+    orientationOverrideFile: () => resolveOrientationFile(cfg, loaded),
+    // 传函数 = 每次拼系统前缀时重取,所以改 mode 之后下一轮就按新自述走,不用重启。
+    orientation: () => resolveOrientation(cfg, loaded),
     // 首轮对话是部署者自己写的,与 ORIENTATION 覆盖同住 prompts/;代码包不带。
     firstTurnDir: resolve(loaded.rootDir, 'prompts'),
     // 现读:WebUI 上关掉,下一次 World 来请托时句柄就已经不在了(不用重启)。
     cognitionEnabled: () => cfg.cognition.enabled,
+    // 模式决定基线:普通＝不主动醒来(返回 null),营业＝按配置的间隔。
     tickDelayMs: () =>
-      cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
+      cfg.mode !== 'work'
+        ? null
+        : cfg.tick.intervalMinutes === null
+          ? null
+          : cfg.tick.intervalMinutes * 60_000,
   });
 
   return {
@@ -108,7 +156,12 @@ function build(loaded: LoadedConfig<CortiVConfig>, worlds: World[]): BotParts<Co
       persona.stopRhythm();
     },
     webUi: {
-      configGroups: [CORTIV_CONTEXT_CONFIG_GROUP, CORTIV_COGNITION_CONFIG_GROUP],
+      // 三个组的 id 必须不同:配置提交按 group id 寻址,撞名会让其中一组存不进去。
+      configGroups: [
+        modeConfigGroup('cortiv:mode'),
+        CORTIV_CONTEXT_CONFIG_GROUP,
+        CORTIV_COGNITION_CONFIG_GROUP,
+      ],
       // 阶段预算与软预警线(控制台页上下文圈的分母与黄线);计数与物理上限由 core 报
       status: () => ({ context: { maxTokens: cfg.context.maxTokens, softRatio: cfg.context.softRatio } }),
     },
@@ -133,6 +186,8 @@ const definition: BotDefinition<CortiVConfig> = {
     // 别把它跟 provider 那份 spec 的 contextWindow(模型物理窗口)或 maxTokens
     // (单轮生成上限)搞混:那两样归 provider,Persona拿不到。
     context: { maxTokens: 64000, keepRatio: 1 / 4, softRatio: 0.85, firstTurn: false, ...CORE_DEFAULTS.context },
+    // 默认营业:这是直播用的是人格,装上就该会自己醒。
+    mode: 'work',
     tick: { intervalMinutes: 45 },
     // 默认开:蓝图设计就走这条,关掉它 Minecraft 那边的 design 只能如实拒收。
     cognition: { enabled: true },

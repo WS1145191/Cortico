@@ -187,3 +187,35 @@ export const PERSONA_DEFAULTS: PersonaConfig = {
   tick: { dayIntervalMinutes: [30, 60], nightIntervalMinutes: 120, nightStartHour: 0, nightEndHour: 8 },
   dream: { maxRounds: 40 },
 };
+
+/**
+ * 模式配置组:普通(只在有人说话时醒) / 营业(按昼夜作息自己醒)。
+ *
+ * 为什么不复用 cormini 的 `modeConfigGroup`:那一组里带 `tick.intervalMinutes`
+ * 单值间隔,而这份 Persona 的作息是「白天区间随机 + 深夜单独一档」四个字段。
+ * 挂错组会让 WebUI 显示一个对这份 Persona 不生效的间隔输入框。
+ *
+ * `tick.*` 四项仍归 `PERSONA_CONFIG_GROUP`(那是原有节奏参数,不搬家),
+ * 这里只多一个总开关。
+ */
+export const SOULMATE_MODE_CONFIG_GROUP: ConfigGroup = {
+  id: 'corti-soulmate:mode',
+  owner: 'persona',
+  schema: {
+    type: 'object',
+    title: '模式',
+    description:
+      '普通＝只在有人说话时醒来,不主动开口。营业＝按下方「认知节奏」里的昼夜作息自己醒。'
+      + '两种模式共用同一份工作区记忆,切换不丢东西;切完下一轮即生效,不用重启。',
+    properties: {
+      mode: {
+        type: 'string',
+        title: '当前模式',
+        enum: ['normal', 'work'],
+        'x-hot': true,
+        description:
+          '普通:安静待着,等你说话。营业:白天在设定区间内随机醒来,深夜按深夜间隔(或完全不醒)。',
+      },
+    },
+  },
+};

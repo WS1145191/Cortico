@@ -16,7 +16,7 @@ import { AUTHOR_OPERATOR } from '../cormini/persona/workspaceGit.ts';
 import { CORMINI_TOOL_DECLS, CORMINI_TOOL_SUMMARIES } from '../cormini/persona/persona.ts';
 import { SURFACE_DECL } from './persona/subconscious/index.ts';
 import { MOVE_FILE_DECL, scheduleWakeSpec } from './persona/tools.ts';
-import { PERSONA_CONFIG_GROUP, PERSONA_DEFAULTS } from './persona/config.ts';
+import { PERSONA_CONFIG_GROUP, PERSONA_DEFAULTS, SOULMATE_MODE_CONFIG_GROUP } from './persona/config.ts';
 import type { PersonaConfig } from './persona/config.ts';
 
 import { type QQConfigSection } from 'cortico/worlds/qq/config.ts';
@@ -36,6 +36,8 @@ export interface BotConfig extends CoreConfig {
   context: CoreConfig['context'] & PersonaConfig['context'];
   loop: PersonaConfig['loop'];
   memo: PersonaConfig['memo'];
+  /** 普通模式恒不醒;营业模式按下面的昼夜作息醒。两档共用一份 Memory。 */
+  mode: 'normal' | 'work';
   tick: PersonaConfig['tick'];
   dream: PersonaConfig['dream'];
   worlds: {
@@ -61,6 +63,8 @@ export function composeDefaults(): BotConfig {
     context: { ...PERSONA_DEFAULTS.context, ...CORE_DEFAULTS.context },
     loop: PERSONA_DEFAULTS.loop,
     memo: PERSONA_DEFAULTS.memo,
+    // 默认营业:这份人格是伴侣型,装上就该按昼夜作息自己醒。
+    mode: 'work',
     tick: PERSONA_DEFAULTS.tick,
     dream: PERSONA_DEFAULTS.dream,
   } as unknown as BotConfig;
@@ -161,7 +165,8 @@ function webUiContribution(loaded: LoadedConfig<BotConfig>, p: WebUiParts): WebU
   };
 
   return {
-    configGroups: [PERSONA_CONFIG_GROUP],
+    // 两组的 id 必须不同:配置提交按 group id 寻址,撞名会让其中一组存不进去。
+    configGroups: [SOULMATE_MODE_CONFIG_GROUP, PERSONA_CONFIG_GROUP],
     promptDocs,
     // 梦 session 的工具 schema。
     extraToolSchemas: () => dream().getBaseToolSchemas(),

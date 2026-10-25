@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import WebSocket from 'ws';
 import { assembleBot, type AssembledBot } from '../../bots/corti-soulmate/assemble.ts';
-import { PERSONA_CONFIG_GROUP } from '../../bots/corti-soulmate/persona/config.ts';
+import { PERSONA_CONFIG_GROUP, SOULMATE_MODE_CONFIG_GROUP } from '../../bots/corti-soulmate/persona/config.ts';
 import { FakeLLM, makeCfg, makeLoaded, makeTmpDir, toolReply, sleep } from '../core/helpers.ts';
 import { validatePairing } from "../core/fixture-truncate.ts";
 import { providerAtBoot } from '../../src/boot.ts';
@@ -203,7 +203,7 @@ describe('全系统集成(控制台对话链路)', () => {
     ]);
 
     expect(g.groups.map((x) => x.group.id)).toEqual([
-      'core', PERSONA_CONFIG_GROUP.id,
+      'core', SOULMATE_MODE_CONFIG_GROUP.id, PERSONA_CONFIG_GROUP.id,
       'world:console', 'world:qq', 'world:bilibili',
       'world:minecraft', 'world:minecraft:rhythm', 'world:minecraft:client', 'world:minecraft:player',
       'world:websearch',
@@ -211,7 +211,7 @@ describe('全系统集成(控制台对话链路)', () => {
     ]);
     // id 标识具体实例；owner 标识与实例无关的架构角色。
     expect(g.groups.map((x) => x.group.owner)).toEqual([
-      'core', 'persona',
+      'core', 'persona', 'persona',
       'world:console', 'world:qq', 'world:bilibili',
       'world:minecraft', 'world:minecraft', 'world:minecraft', 'world:minecraft',
       'world:websearch',

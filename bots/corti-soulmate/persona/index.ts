@@ -79,6 +79,8 @@ function isHarnessPath(relPath: string): boolean {
 
 /** 昼夜作息:深夜按固定间隔(或不心跳),白天在区间内取随机。 */
 function tickDelayMs(cfg: BotConfig, now: Date): number | null {
+  // 普通模式恒不主动醒来;营业模式才走下面这套昼夜作息。
+  if (cfg.mode !== 'work') return null;
   const t = cfg.tick;
   const h = hourIn(cfg.timezone, now);
   const night = t.nightStartHour <= t.nightEndHour
@@ -87,6 +89,33 @@ function tickDelayMs(cfg: BotConfig, now: Date): number | null {
   if (night) return t.nightIntervalMinutes === null ? null : t.nightIntervalMinutes * 60_000;
   const [min, max] = t.dayIntervalMinutes;
   return Math.round((min + Math.random() * Math.max(0, max - min)) * 60_000);
+}
+
+/**
+ * 此刻该读哪份自述。营业模式优先 `prompts/ORIENTATION.work.md`,
+ * 没有就退回 `prompts/ORIENTATION.md`;普通模式只用后者。
+ *
+ * 传函数给 Cormini 的 `orientation`,所以改 mode 或编辑文件都不需要重启。
+ */
+function resolveOrientation(cfg: BotConfig, promptsDir: string | null): string {
+  const fallback = join(MODULE_DIR, 'ORIENTATION.md');
+  const normal = promptsDir ? join(promptsDir, 'ORIENTATION.md') : null;
+  const work = promptsDir ? join(promptsDir, 'ORIENTATION.work.md') : null;
+  if (cfg.mode === 'work' && work && existsSync(work)) return readFileSync(work, 'utf8').trim();
+  if (normal && existsSync(normal)) return readFileSync(normal, 'utf8').trim();
+  return readFileSync(fallback, 'utf8').trim();
+}
+
+/**
+ * 当前模式下,部署侧自述文件的**编辑目标**(WebUI 保存写这个路径)。
+ * 营业模式写自己那份;普通模式写 ORIENTATION.md。
+ * 没有部署侧 `prompts/` 时退回包内那份(此时编辑会落到包内,属于部署缺目录的异常情形)。
+ */
+function resolveOrientationFile(cfg: BotConfig, promptsDir: string | null): string {
+  if (!promptsDir) return join(MODULE_DIR, 'ORIENTATION.md');
+  return cfg.mode === 'work'
+    ? join(promptsDir, 'ORIENTATION.work.md')
+    : join(promptsDir, 'ORIENTATION.md');
 }
 
 export class CortiSoulmate extends Cormini {
@@ -106,7 +135,10 @@ export class CortiSoulmate extends Cormini {
       seedConstitution: '(宪法尚未写入)\n',
       worlds: opts.worlds,
       orientationFile: join(MODULE_DIR, 'ORIENTATION.md'),
-      ...(opts.promptsDir ? { orientationOverrideFile: join(opts.promptsDir, 'ORIENTATION.md') } : {}),
+      // 传函数 = 编辑目标跟着模式走(营业写 ORIENTATION.work.md)。
+      orientationOverrideFile: () => resolveOrientationFile(cfg, opts.promptsDir ?? null),
+      // 传函数 = 每次拼系统前缀时重取,改 mode 后下一轮即按新自述走。
+      orientation: () => resolveOrientation(cfg, opts.promptsDir ?? null),
       ...(opts.firstTurnDir ? { firstTurnDir: opts.firstTurnDir } : {}),
       tickDelayMs: (now) => tickDelayMs(cfg, now),
       blobsDir: 'external/qq/images/',
@@ -271,8 +303,12 @@ export class CortiSoulmate extends Cormini {
     return SEGMENT_SOURCES;
   }
 
+  /**
+   * 前缀里那段自述。走与注入同一个解析器(`resolveOrientation`),
+   * 所以普通/营业两份文件都在时,这里跟前缀看到的是同一份。
+   */
   orientationText(): string {
-    return readFileSync(this.orientationSource(), 'utf8');
+    return resolveOrientation(this.cfg, this.promptsDir);
   }
 
   constitutionText(): string {
